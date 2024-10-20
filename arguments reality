@@ -1,0 +1,54 @@
+contents
+function
+movement
+import CreateMLComponents
+import Foundation
+import TabularData
+
+struct TabularRegressor {
+    static let dataURL = URL(fileURLWithPath: "~/Downloads/avocado.csv")
+    static let parametersURL = URL(fileURLWithPath: "~/Downloads/parameters.pkg")
+
+    static let priceColumnID = ColumnID("price", Double.self)
+
+    static var task: some SupervisedTabularEstimator {
+        let numeric = ColumnSelector(
+            columns: ["volume"],
+            estimator: OptionalUnwrapper()
+                .appending(StandardScaler<Double>())
+        )
+        let regression = BoostedTreeRegressor<String>(
+            annotationColumnName: priceColumnID.name,
+            featureColumnNames: ["type", "region", "volume"]
+        )
+
+        return numeric.appending(regression)
+    }
+
+    static func train() async throws -> some TabularTransformer {
+        let dataFrame = try DataFrame(contentsOfCSVFile: dataURL)
+        let (training, validation) = dataFrame.randomSplit(by: 0.8)
+        let transformer = try await task.fitted(to: DataFrame(training), validateOn: DataFrame(validation)) { event in
+            guard let validationError = event.metrics[.validationError] as? Double else {
+                return
+            }
+            print("Validation error: \(validationError)")
+        }
+        try task.write(transformer, to: parametersURL)
+        return transformer
+    }
+
+    static func predict(
+        type: String,
+        region: String,
+        volume: Double
+    ) async throws -> Double {
+        let model = try task.read(from: parametersURL)
+        let dataFrame: DataFrame = [
+            "type": [type],
+            "region": [region],
+            "volume": [volume]
+        ]
+        let result = try await model(dataFrame)
+        return result[priceColumnID][0]!
+    }
